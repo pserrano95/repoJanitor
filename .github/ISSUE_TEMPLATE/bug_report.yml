@@ -1,0 +1,33 @@
+name: Bug report
+description: Report reproducible incorrect behavior without private repository data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, proprietary code, full prompts, or private CI logs.
+  - type: input
+    id: version
+    attributes:
+      label: RepoJanitor version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+

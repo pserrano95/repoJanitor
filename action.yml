@@ -1,0 +1,128 @@
+name: RepoJanitor
+description: Diagnose a failing owner-declared CI command with a provider-agnostic model
+author: RepoJanitor contributors
+
+branding:
+  icon: tool
+  color: purple
+
+inputs:
+  config:
+    description: Path to RepoJanitor JSON configuration in the checked-out repository
+    required: true
+  command-json:
+    description: Command to execute as a JSON string array; it is never passed through a shell
+    required: true
+  context-files:
+    description: Newline-separated repository files the model may read
+    required: true
+  allowed-paths:
+    description: Newline-separated patch allowlist; defaults to context-files
+    required: false
+    default: ""
+  forbidden-paths:
+    description: Newline-separated task-specific patch denylist
+    required: false
+    default: ""
+  acceptance:
+    description: Newline-separated acceptance criteria
+    required: false
+    default: ""
+  title:
+    description: Human-readable failure title
+    required: false
+    default: GitHub Actions check failed
+  apply:
+    description: Apply the proposal in a detached worktree and run configured validations
+    required: false
+    default: "false"
+  allow-fork:
+    description: Explicitly allow inference for fork pull requests
+    required: false
+    default: "false"
+  max-log-bytes:
+    description: Maximum redacted log-tail bytes retained as evidence
+    required: false
+    default: "65536"
+  mock-response:
+    description: Optional offline response fixture; intended only for integration tests
+    required: false
+    default: ""
+
+outputs:
+  status:
+    description: CI_PASSED, PROPOSED, VALIDATED, PATCH_APPLIED_UNVERIFIED, or FAILED_VALIDATION
+    value: ${{ steps.run.outputs.status }}
+  command-exit-code:
+    description: Exit code of the owner-declared CI command
+    value: ${{ steps.run.outputs.command-exit-code }}
+  report:
+    description: Path to the Markdown report
+    value: ${{ steps.run.outputs.report }}
+  patch:
+    description: Path to the proposed unified diff
+    value: ${{ steps.run.outputs.patch }}
+  artifact-id:
+    description: GitHub artifact identifier when a diagnosis was produced
+    value: ${{ steps.upload.outputs.artifact-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install RepoJanitor
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python -m pip install "${ACTION_PATH}[openai]"
+
+    - name: Run check and diagnose failures
+      id: run
+      shell: bash
+      env:
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_COMMAND_JSON: ${{ inputs.command-json }}
+        INPUT_CONTEXT_FILES: ${{ inputs.context-files }}
+        INPUT_ALLOWED_PATHS: ${{ inputs.allowed-paths }}
+        INPUT_FORBIDDEN_PATHS: ${{ inputs.forbidden-paths }}
+        INPUT_ACCEPTANCE: ${{ inputs.acceptance }}
+        INPUT_TITLE: ${{ inputs.title }}
+        INPUT_APPLY: ${{ inputs.apply }}
+        INPUT_ALLOW_FORK: ${{ inputs.allow-fork }}
+        INPUT_MAX_LOG_BYTES: ${{ inputs.max-log-bytes }}
+        INPUT_MOCK_RESPONSE: ${{ inputs.mock-response }}
+      run: |
+        options=()
+        if [[ "$INPUT_APPLY" == "true" ]]; then options+=(--apply); fi
+        if [[ "$INPUT_ALLOW_FORK" == "true" ]]; then options+=(--allow-fork); fi
+        if [[ -n "$INPUT_MOCK_RESPONSE" ]]; then options+=(--mock-response "$INPUT_MOCK_RESPONSE"); fi
+        set +e
+        python -m repojanitor.cli ci \
+          --config "$INPUT_CONFIG" \
+          --command-json "$INPUT_COMMAND_JSON" \
+          --context-files "$INPUT_CONTEXT_FILES" \
+          --allowed-paths "$INPUT_ALLOWED_PATHS" \
+          --forbidden-paths "$INPUT_FORBIDDEN_PATHS" \
+          --acceptance "$INPUT_ACCEPTANCE" \
+          --title "$INPUT_TITLE" \
+          --max-log-bytes "$INPUT_MAX_LOG_BYTES" \
+          "${options[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Upload RepoJanitor evidence
+      id: upload
+      if: steps.run.outputs.run-dir != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: repojanitor-${{ github.run_id }}-${{ github.job }}
+        path: ${{ steps.run.outputs.run-dir }}
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Preserve the original CI result
+      if: steps.run.outputs.exit-code != '0'
+      shell: bash
+      env:
+        REPOJANITOR_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+      run: exit "$REPOJANITOR_EXIT_CODE"

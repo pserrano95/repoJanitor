@@ -1,0 +1,32 @@
+{
+  "id": "ci-parser-4821",
+  "kind": "failing_test",
+  "title": "Parser returns an incorrect value for blank input",
+  "base_ref": "HEAD",
+  "evidence": [
+    "tests/test_parser.py::test_blank_input fails consistently",
+    "Expected None but received an empty string"
+  ],
+  "acceptance": [
+    "The original failing test passes",
+    "The complete unit test suite passes",
+    "No public API is changed"
+  ],
+  "context_files": [
+    "src/parser.py",
+    "tests/test_parser.py"
+  ],
+  "allowed_paths": [
+    "src/parser.py",
+    "tests/test_parser.py"
+  ],
+  "forbidden_paths": [],
+  "limits": {
+    "max_changed_files": 2,
+    "max_diff_lines": 80,
+    "max_context_bytes": 200000,
+    "max_output_tokens": 8000,
+    "max_cost_usd": 0.15
+  }
+}
+

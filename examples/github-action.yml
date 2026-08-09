@@ -1,0 +1,36 @@
+name: test-and-diagnose
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Test and propose a repair on failure
+        uses: pserrano95/repoJanitor@v0.2.0
+        with:
+          config: examples/github-repojanitor.json
+          command-json: '["python", "-m", "unittest", "discover", "-s", "tests", "-v"]'
+          context-files: |
+            repojanitor/orchestrator.py
+            repojanitor/policy.py
+            tests/test_orchestrator.py
+            tests/test_policy.py
+          allowed-paths: |
+            repojanitor/**
+            tests/**
+          acceptance: |
+            The failing test passes.
+            Existing tests remain green.
+          apply: "true"
+        env:
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}

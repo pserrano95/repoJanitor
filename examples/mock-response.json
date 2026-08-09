@@ -1,0 +1,22 @@
+{
+  "diagnosis": {
+    "summary": "The parser does not normalize blank input.",
+    "root_cause": "parse_value returns the input directly before checking for blank content.",
+    "confidence": 0.94
+  },
+  "proposed_change": {
+    "summary": "Return None for an empty or whitespace-only value.",
+    "patch": "diff --git a/src/parser.py b/src/parser.py\n--- a/src/parser.py\n+++ b/src/parser.py\n@@ -1,2 +1,4 @@\n def parse_value(value):\n+    if not value or not value.strip():\n+        return None\n     return value\n",
+    "changed_files": ["src/parser.py"]
+  },
+  "verification": {
+    "commands": ["pytest"],
+    "risks": ["Callers that relied on an empty string will now receive None."],
+    "assumptions": ["Input values are strings or None."]
+  },
+  "_usage": {
+    "input_tokens": 12000,
+    "cached_input_tokens": 8000,
+    "output_tokens": 600
+  }
+}

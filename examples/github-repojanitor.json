@@ -1,0 +1,36 @@
+{
+  "repo_path": "..",
+  "artifact_dir": "../.repojanitor/runs",
+  "worktree_dir": "../../repojanitor-worktrees",
+  "provider": {
+    "adapter": "openai_chat_completions",
+    "name": "fireworks",
+    "model": "accounts/fireworks/models/deepseek-v4-flash",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "structured_output": "json_schema",
+    "request_options": {
+      "reasoning_effort": "high"
+    },
+    "pricing": {
+      "input_per_million": 0.14,
+      "cached_input_per_million": 0.028,
+      "output_per_million": 0.28
+    }
+  },
+  "allowed_paths": ["repojanitor/**", "tests/**"],
+  "denied_paths": [
+    ".git/**",
+    ".github/workflows/**",
+    ".env",
+    "**/.env*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*secret*",
+    "**/credentials*"
+  ],
+  "validation_commands": [
+    ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
+  ],
+  "command_timeout_seconds": 600
+}
