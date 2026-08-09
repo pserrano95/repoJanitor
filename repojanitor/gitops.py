@@ -42,11 +42,27 @@ def create_worktree(repo: Path, worktree_base: Path, task_id: str, base_ref: str
 
 
 def apply_patch(worktree: Path, patch: str) -> None:
-    run_git(
-        worktree,
-        ["apply", "--recount", "--whitespace=nowarn", "-"],
-        input_text=patch,
-    )
+    strict_args = ["apply", "--recount", "--whitespace=nowarn", "-"]
+    try:
+        run_git(worktree, strict_args, input_text=patch)
+        return
+    except RuntimeError as strict_error:
+        reduced_context_args = [
+            "apply",
+            "--recount",
+            "--unidiff-zero",
+            "--whitespace=nowarn",
+            "-",
+        ]
+        try:
+            run_git(
+                worktree,
+                [*reduced_context_args[:1], "--check", *reduced_context_args[1:]],
+                input_text=patch,
+            )
+            run_git(worktree, reduced_context_args, input_text=patch)
+        except RuntimeError:
+            raise strict_error
 
 
 def diff_stat(worktree: Path) -> str:

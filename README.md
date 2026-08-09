@@ -156,7 +156,7 @@ steps:
     with:
       python-version: "3.11"
   - name: Test and propose a repair on failure
-    uses: pserrano95/repoJanitor@v0.2.1
+    uses: pserrano95/repoJanitor@v0.2.2
     with:
       config: examples/github-repojanitor.json
       command-json: '["python", "-m", "unittest", "discover", "-s", "tests", "-v"]'

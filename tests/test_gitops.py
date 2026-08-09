@@ -12,7 +12,7 @@ class GitOpsTests(unittest.TestCase):
             repo = Path(raw) / "demo"
             repo.mkdir()
             source = repo / "parser.py"
-            source.write_text("def parse(value):\n    return int(value)\n", encoding="utf-8")
+            source.write_text("def parse(value):\n    return int(value)\n\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
             subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
 
