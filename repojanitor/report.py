@@ -17,6 +17,7 @@ def write_artifacts(
     validations: tuple[CommandResult, ...],
     redaction_count: int,
     worktree: Path | None,
+    application_error: str | None = None,
 ) -> tuple[Path, Path, Path]:
     run_dir = artifact_dir / packet.id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -37,6 +38,11 @@ def write_artifacts(
     assumptions = (
         "".join(f"- {item}\n" for item in model_result.fix.assumptions)
         or "- None declared.\n"
+    )
+    application = (
+        f"- Rejected before validation: `{application_error}`"
+        if application_error
+        else "- Applied successfully or not requested."
     )
 
     report = f"""# RepoJanitor report: {packet.id}
@@ -64,6 +70,8 @@ Files declared by the validated patch:
 {changed_files}
 ## Validation
 
+{application}
+
 {chr(10).join(validation_lines)}
 
 Only commands configured by the repository owner were executed. Commands suggested by the model were ignored.
@@ -90,6 +98,7 @@ Only commands configured by the repository owner were executed. Commands suggest
         "redactions": redaction_count,
         "changed_files": list(paths),
         "validation_exit_codes": [result.exit_code for result in validations],
+        "application_error": application_error,
     }
     metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")

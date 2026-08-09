@@ -44,6 +44,7 @@ class RepoJanitor:
         worktree = None
         validations = ()
         status = "PROPOSED"
+        application_error = None
         if apply:
             worktree = create_worktree(
                 repo,
@@ -51,15 +52,24 @@ class RepoJanitor:
                 packet.id,
                 packet.base_ref,
             )
-            apply_patch(worktree, model_result.fix.patch)
-            validations = run_validations(
-                worktree,
-                self.config.validation_commands,
-                self.config.command_timeout_seconds,
-            )
-            status = "VALIDATED" if validations and all(item.passed for item in validations) else "FAILED_VALIDATION"
-            if not self.config.validation_commands:
-                status = "PATCH_APPLIED_UNVERIFIED"
+            try:
+                apply_patch(worktree, model_result.fix.patch)
+            except RuntimeError as exc:
+                status = "PATCH_REJECTED"
+                application_error = str(exc)
+            else:
+                validations = run_validations(
+                    worktree,
+                    self.config.validation_commands,
+                    self.config.command_timeout_seconds,
+                )
+                status = (
+                    "VALIDATED"
+                    if validations and all(item.passed for item in validations)
+                    else "FAILED_VALIDATION"
+                )
+                if not self.config.validation_commands:
+                    status = "PATCH_APPLIED_UNVERIFIED"
 
         report_path, patch_path, _ = write_artifacts(
             self.config.artifact_dir,
@@ -71,6 +81,7 @@ class RepoJanitor:
             validations,
             redaction_count,
             worktree,
+            application_error,
         )
         return RunResult(
             task_id=packet.id,

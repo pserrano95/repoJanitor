@@ -92,7 +92,7 @@ def run_task(args: argparse.Namespace) -> int:
         "worktree": result.worktree_path,
         "estimated_cost_usd": config.provider.pricing.estimate(result.model_result.usage),
     }, indent=2))
-    return 0 if result.status not in {"FAILED_VALIDATION"} else 2
+    return 0 if result.status not in {"FAILED_VALIDATION", "PATCH_REJECTED"} else 2
 
 
 def _write_github_output(values: dict[str, str | int | None]) -> None:

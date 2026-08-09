@@ -51,7 +51,7 @@ inputs:
 
 outputs:
   status:
-    description: CI_PASSED, PROPOSED, VALIDATED, PATCH_APPLIED_UNVERIFIED, or FAILED_VALIDATION
+    description: CI_PASSED, PROPOSED, VALIDATED, PATCH_APPLIED_UNVERIFIED, PATCH_REJECTED, or FAILED_VALIDATION
     value: ${{ steps.run.outputs.status }}
   command-exit-code:
     description: Exit code of the owner-declared CI command

@@ -116,6 +116,88 @@ class ParserTest(unittest.TestCase):
             self.assertIn("Only commands configured", report)
             self.assertNotIn("untrusted model command`", report)
 
+    def test_rejected_patch_still_produces_auditable_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repo = base / "demo"
+            repo.mkdir()
+            (repo / "src").mkdir()
+            (repo / "src" / "parser.py").write_text(
+                "def parse_value(value):\n    return value\n", encoding="utf-8"
+            )
+            git(repo, "init")
+            git(repo, "config", "user.email", "repojanitor@example.test")
+            git(repo, "config", "user.name", "RepoJanitor Test")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "fixture")
+
+            response_path = base / "response.json"
+            response_path.write_text(
+                json.dumps(
+                    {
+                        "diagnosis": {
+                            "summary": "Blank input is returned unchanged.",
+                            "root_cause": "Missing normalization.",
+                            "confidence": 0.95,
+                        },
+                        "proposed_change": {
+                            "summary": "Normalize blank strings.",
+                            "patch": (
+                                "diff --git a/src/parser.py b/src/parser.py\n"
+                                "--- a/src/parser.py\n"
+                                "+++ b/src/parser.py\n"
+                                "@@ -1,2 +1,4 @@\n"
+                                " def parse_different_name(value):\n"
+                                "+    if value == \"\":\n"
+                                "+        return None\n"
+                                "     return value\n"
+                            ),
+                            "changed_files": ["src/parser.py"],
+                        },
+                        "verification": {
+                            "commands": [],
+                            "risks": [],
+                            "assumptions": [],
+                        },
+                        "_usage": {"input_tokens": 10, "output_tokens": 10},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = RepoConfig(
+                repo_path=repo,
+                artifact_dir=base / "artifacts",
+                worktree_dir=base / "worktrees",
+                provider=ProviderConfig(
+                    adapter="openai_chat_completions",
+                    name="mock",
+                    model="mock-model",
+                    base_url="https://example.test/v1",
+                    api_key_env="MOCK_API_KEY",
+                ),
+                allowed_paths=("src/**",),
+                validation_commands=(("python", "-c", "raise SystemExit(99)"),),
+            )
+            packet = TaskPacket(
+                id="rejected-patch",
+                kind="failing_test",
+                title="Fix blank parsing",
+                context_files=("src/parser.py",),
+                allowed_paths=("src/parser.py",),
+                limits=TaskLimits(max_cost_usd=1.0),
+            )
+
+            result = RepoJanitor(config, FileProvider(response_path)).run(packet, apply=True)
+
+            self.assertEqual(result.status, "PATCH_REJECTED")
+            self.assertEqual(result.validations, ())
+            self.assertTrue(Path(result.patch_path).is_file())
+            metadata = json.loads(
+                (Path(result.report_path).parent / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["status"], "PATCH_REJECTED")
+            self.assertIn("patch does not apply", metadata["application_error"])
+
 
 if __name__ == "__main__":
     unittest.main()

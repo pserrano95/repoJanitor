@@ -42,9 +42,12 @@ def create_worktree(repo: Path, worktree_base: Path, task_id: str, base_ref: str
 
 
 def apply_patch(worktree: Path, patch: str) -> None:
-    run_git(worktree, ["apply", "--whitespace=nowarn", "-"], input_text=patch)
+    run_git(
+        worktree,
+        ["apply", "--recount", "--whitespace=nowarn", "-"],
+        input_text=patch,
+    )
 
 
 def diff_stat(worktree: Path) -> str:
     return run_git(worktree, ["diff", "--stat"]).stdout.strip()
-
