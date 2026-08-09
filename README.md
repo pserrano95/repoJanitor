@@ -30,6 +30,16 @@ Version 0.2 adds a GitHub composite Action that:
 6. Writes the diagnosis into the GitHub job summary and uploads the report and patch as an artifact.
 7. Preserves the original non-zero result, so an advisory repair never turns a failing build green.
 
+Version 0.3 adds a reproduce-before-repair gate that:
+
+1. Re-runs the same owner-declared command from the verified commit in a clean detached worktree.
+2. Removes the provider credential from both the original command and its reproduction.
+3. Compares exit codes and normalized failure signatures before inference.
+4. Skips the provider with zero model cost when the failure disappears, changes, or times out.
+5. Stores `reproduction.log` and `reproduction.json` alongside the normal evidence.
+
+This isolates repository state but is not an operating-system or network sandbox.
+
 ## Requirements
 
 - Python 3.11+
@@ -60,6 +70,7 @@ Copy `examples/repojanitor.json` to a location of your choice and update:
 - `worktree_dir`: preferably outside the primary working tree.
 - `allowed_paths` and `denied_paths`: repository-wide boundaries.
 - `validation_commands`: arrays of executable and arguments. Strings are deliberately not passed through a shell.
+- `reproduction_similarity_threshold`: minimum normalized failure-signature overlap, from `0.0` to `1.0`; the default is `0.5`.
 - `provider`: adapter, endpoint, model, credential variable, request options, and pricing.
 
 The included provider section is entirely declarative:
@@ -156,7 +167,7 @@ steps:
     with:
       python-version: "3.11"
   - name: Test and propose a repair on failure
-    uses: pserrano95/repoJanitor@v0.2.2
+    uses: pserrano95/repoJanitor@v0.3.0
     with:
       config: examples/github-repojanitor.json
       command-json: '["python", "-m", "unittest", "discover", "-s", "tests", "-v"]'
@@ -176,7 +187,7 @@ steps:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 ```
 
-The Action installs RepoJanitor, runs the declared command, and does nothing model-related when it succeeds. On failure it creates `ci.log`, `packet.json`, `report.md`, `proposed.patch`, and `metadata.json`; the generated run directory is uploaded for human review. Pin a release tag or full commit SHA in production workflows.
+The Action installs RepoJanitor, runs the declared command, and does nothing model-related when it succeeds. On failure it reproduces the command from the verified commit before inference. The default `reproduce-before-repair: "true"` input can be disabled explicitly for compatibility, though keeping the gate enabled is recommended. Evidence includes `ci.log`, `reproduction.log`, `reproduction.json`, `packet.json`, `report.md`, `proposed.patch`, and `metadata.json` when applicable; the generated run directory is uploaded for human review. Pin a release tag or full commit SHA in production workflows.
 
 Inference is denied for `pull_request_target`, unsupported events, mismatched checkouts, and fork pull requests by default. The optional `allow-fork` input is an explicit trust decision and should not be combined with privileged secrets.
 
@@ -196,6 +207,7 @@ For the Fireworks example, the MVP uses Chat Completions rather than Responses A
 - The model's suggested commands are recorded neither as authority nor execution input.
 - Validation commands use direct process invocation with no shell expansion.
 - Model cost is estimated from provider usage and configured pricing before any patch is applied.
+- Provider inference is gated on a matching clean-worktree reproduction; transient or materially different failures produce an artifact with zero model cost.
 
 Redaction is defense in depth, not a secret scanner. Production use should add a dedicated scanner such as Gitleaks before inference and configure network and filesystem sandboxing around validation commands.
 
@@ -217,11 +229,11 @@ It covers credential redaction, patch path policy, traversal rejection, worktree
 - Standalone GitHub Checks, issues, or draft pull requests.
 - Durable job queue and concurrency control.
 - Dedicated US deployment provisioning.
-- Gitleaks integration and container sandboxing.
+- Gitleaks integration and operating-system/container sandboxing.
 - Production observability without payload retention.
 
 ## Open-source project
 
 RepoJanitor is released under the MIT License. See `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, and the GitHub templates before contributing. The repository CI matrix exercises Python 3.11 and 3.13 on Linux and Windows.
 
-The next vertical should add a sandboxed reproduce-before-repair loop and a dedicated secret scanner before inference.
+The next hardening vertical should add a dedicated secret scanner before inference and a true container/runner sandbox around command execution.

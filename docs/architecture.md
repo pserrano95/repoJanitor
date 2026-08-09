@@ -37,6 +37,10 @@ GitHub event + checked-out commit
               |
        Owner-declared command
               |
+       Clean-worktree replay
+              |
+       Exit/signature match gate
+              |
        Bounded log redactor
               |
               v
@@ -70,7 +74,9 @@ Third-party packages register factories in the `repojanitor.providers` entry-poi
 
 The provider never receives filesystem or process authority. It sees only context approved and redacted by core. Its patch is inert text until the policy gate accepts it. Validation commands come exclusively from trusted repository configuration and bypass shell parsing.
 
-The GitHub Action also treats workflow metadata and logs as untrusted. It rejects `pull_request_target`, unsupported events, repository or SHA mismatches, and forks unless explicitly allowed. The failing command is invoked without a shell and without the configured provider API key in its environment. The Action needs only `contents: read`; it writes a job summary and artifact but cannot commit or modify the repository.
+The GitHub Action also treats workflow metadata and logs as untrusted. It rejects `pull_request_target`, unsupported events, repository or SHA mismatches, and forks unless explicitly allowed. The failing command is invoked without a shell and without the configured provider API key in its environment. Before inference, the same owner-declared command runs again from the verified commit in a clean detached worktree. RepoJanitor calls the provider only when the exit code and normalized failure signature match. The Action needs only `contents: read`; it writes a job summary and artifact but cannot commit or modify the repository.
+
+The clean worktree isolates repository state, not the operating system. Version 0.3 does not claim container, network, kernel, or filesystem sandboxing; those remain separate runner integrations on the roadmap.
 
 ## Future modules
 

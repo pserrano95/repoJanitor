@@ -10,11 +10,15 @@ from pathlib import Path
 from .config import load_config
 from .gitops import repository_root
 from .github_actions import (
+    CapturedCommand,
+    ReproductionResult,
     build_failure_packet,
     capture_command,
     default_task_id,
     parse_command_json,
     parse_multiline,
+    reproduce_failure,
+    reproduction_payload,
     verify_github_context,
     write_packet,
 )
@@ -49,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     ci.add_argument("--task-id")
     ci.add_argument("--max-log-bytes", type=int, default=65_536)
     ci.add_argument("--allow-fork", action="store_true")
+    ci.add_argument(
+        "--skip-reproduction",
+        action="store_true",
+        help="Skip the clean-worktree reproduce-before-repair gate",
+    )
     ci.add_argument("--apply", action="store_true")
     ci.add_argument("--mock-response", help="Offline response fixture for integration tests")
     return parser
@@ -115,6 +124,81 @@ def _append_github_summary(report_path: str) -> None:
         handle.write("\n")
 
 
+def _reproduction_section(record: dict[str, object]) -> str:
+    return f"""## Clean-worktree reproduction
+
+- Status: **{record['status']}**
+- Original exit code: {record['original_exit_code']}
+- Reproduction exit code: {record['reproduction_exit_code']}
+- Failure-signature similarity: {float(record['failure_similarity']):.3f}
+- Result: {record['reason']}
+
+The command came from repository-owner configuration and ran without the provider credential.
+"""
+
+
+def _write_reproduction_record(
+    run_dir: Path,
+    original: CapturedCommand,
+    reproduction: ReproductionResult,
+) -> dict[str, object]:
+    record = reproduction_payload(original, reproduction)
+    (run_dir / "reproduction.json").write_text(
+        json.dumps(record, indent=2), encoding="utf-8"
+    )
+    return record
+
+
+def _write_reproduction_gate_report(
+    run_dir: Path,
+    task_id: str,
+    title: str,
+    record: dict[str, object],
+) -> Path:
+    report_path = run_dir / "report.md"
+    report_path.write_text(
+        f"""# RepoJanitor report: {task_id}
+
+## Outcome
+
+- Status: **{record['status']}**
+- Task: {title}
+- Provider called: **no**
+- Estimated model cost: $0.000000
+
+{_reproduction_section(record)}
+
+No repair was requested because the verified commit did not reproduce the original failure closely enough.
+""",
+        encoding="utf-8",
+    )
+    metadata = {
+        "task_id": task_id,
+        "status": record["status"],
+        "provider_called": False,
+        "estimated_cost_usd": 0.0,
+        "reproduction": record,
+    }
+    (run_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
+    return report_path
+
+
+def _attach_reproduction_to_model_artifacts(
+    report_path: Path,
+    record: dict[str, object],
+) -> None:
+    with report_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+        handle.write(_reproduction_section(record))
+    metadata_path = report_path.parent / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["provider_called"] = True
+    metadata["reproduction"] = record
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+
 def run_ci(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     repo = repository_root(config.repo_path)
@@ -139,6 +223,24 @@ def run_ci(args: argparse.Namespace) -> int:
     if not context_files:
         raise ValueError("context-files must contain at least one repository path")
     allowed_paths = parse_multiline(args.allowed_paths) or context_files
+    reproduction = None
+    reproduction_record = None
+    if not getattr(args, "skip_reproduction", False):
+        reproduction = reproduce_failure(
+            capture,
+            repo=repo,
+            worktree_base=config.worktree_dir,
+            task_id=task_id,
+            base_ref=context.sha,
+            log_path=capture_dir / "reproduction.log",
+            max_log_bytes=args.max_log_bytes,
+            timeout_seconds=config.command_timeout_seconds,
+            remove_env=(config.provider.api_key_env,),
+            similarity_threshold=config.reproduction_similarity_threshold,
+        )
+        reproduction_record = _write_reproduction_record(
+            capture_dir, capture, reproduction
+        )
     packet = build_failure_packet(
         capture,
         context,
@@ -148,15 +250,40 @@ def run_ci(args: argparse.Namespace) -> int:
         forbidden_paths=parse_multiline(args.forbidden_paths),
         acceptance=parse_multiline(args.acceptance),
         task_id=task_id,
+        reproduction=reproduction,
     )
     packet_path = capture_dir / "packet.json"
     write_packet(packet_path, packet)
+    if reproduction is not None and not reproduction.reproduced:
+        if reproduction_record is None:  # pragma: no cover - guarded by construction
+            raise RuntimeError("Missing reproduction evidence")
+        report_path = _write_reproduction_gate_report(
+            capture_dir,
+            task_id,
+            args.title,
+            reproduction_record,
+        )
+        values = {
+            "status": reproduction.status,
+            "command-exit-code": capture.exit_code,
+            "report": str(report_path),
+            "packet": str(packet_path),
+            "run-dir": str(capture_dir),
+        }
+        _write_github_output(values)
+        _append_github_summary(str(report_path))
+        print(json.dumps(values, indent=2))
+        return 1
     provider = (
         FileProvider(Path(args.mock_response).resolve())
         if args.mock_response
         else create_provider(config)
     )
     result = RepoJanitor(config, provider).run(packet, apply=args.apply)
+    if reproduction_record is not None:
+        _attach_reproduction_to_model_artifacts(
+            Path(result.report_path), reproduction_record
+        )
     run_dir = str(Path(result.report_path).parent)
     values = {
         "status": result.status,

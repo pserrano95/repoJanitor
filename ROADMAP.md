@@ -28,7 +28,7 @@
 
 - [ ] Container and Windows sandbox runners.
 - [ ] Gitleaks pre-inference scan.
-- [ ] Reproduce-before-repair contract.
+- [x] Reproduce-before-repair contract with a clean detached worktree and failure-signature gate.
 - [ ] Bounded iterative fixes after failed validation.
 - [ ] Independent reviewer adapter and confidence policy.
 

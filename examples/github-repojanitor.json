@@ -32,5 +32,6 @@
   "validation_commands": [
     ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]
   ],
-  "command_timeout_seconds": 600
+  "command_timeout_seconds": 600,
+  "reproduction_similarity_threshold": 0.5
 }

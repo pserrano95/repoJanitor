@@ -36,6 +36,10 @@ inputs:
     description: Apply the proposal in a detached worktree and run configured validations
     required: false
     default: "false"
+  reproduce-before-repair:
+    description: Re-run the failing command from the verified commit before model inference
+    required: false
+    default: "true"
   allow-fork:
     description: Explicitly allow inference for fork pull requests
     required: false
@@ -51,7 +55,7 @@ inputs:
 
 outputs:
   status:
-    description: CI_PASSED, PROPOSED, VALIDATED, PATCH_APPLIED_UNVERIFIED, PATCH_REJECTED, or FAILED_VALIDATION
+    description: CI_PASSED, reproduction gate status, PROPOSED, VALIDATED, PATCH_APPLIED_UNVERIFIED, PATCH_REJECTED, or FAILED_VALIDATION
     value: ${{ steps.run.outputs.status }}
   command-exit-code:
     description: Exit code of the owner-declared CI command
@@ -87,12 +91,14 @@ runs:
         INPUT_ACCEPTANCE: ${{ inputs.acceptance }}
         INPUT_TITLE: ${{ inputs.title }}
         INPUT_APPLY: ${{ inputs.apply }}
+        INPUT_REPRODUCE_BEFORE_REPAIR: ${{ inputs.reproduce-before-repair }}
         INPUT_ALLOW_FORK: ${{ inputs.allow-fork }}
         INPUT_MAX_LOG_BYTES: ${{ inputs.max-log-bytes }}
         INPUT_MOCK_RESPONSE: ${{ inputs.mock-response }}
       run: |
         options=()
         if [[ "$INPUT_APPLY" == "true" ]]; then options+=(--apply); fi
+        if [[ "$INPUT_REPRODUCE_BEFORE_REPAIR" != "true" ]]; then options+=(--skip-reproduction); fi
         if [[ "$INPUT_ALLOW_FORK" == "true" ]]; then options+=(--allow-fork); fi
         if [[ -n "$INPUT_MOCK_RESPONSE" ]]; then options+=(--mock-response "$INPUT_MOCK_RESPONSE"); fi
         set +e

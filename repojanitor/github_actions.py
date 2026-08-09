@@ -13,12 +13,15 @@ import threading
 import time
 from typing import Any
 
+from .gitops import create_worktree
 from .models import TaskLimits, TaskPacket
 from .redaction import redact
 
 
 SUPPORTED_EVENTS = {"merge_group", "pull_request", "push", "workflow_dispatch"}
 SAFE_ID = re.compile(r"[^A-Za-z0-9._-]+")
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+SIGNATURE_TOKEN = re.compile(r"[a-z_][a-z0-9_.:/-]{2,}")
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,19 @@ class GitHubContext:
     run_id: str
     run_attempt: str
     run_url: str
+
+
+@dataclass(frozen=True)
+class ReproductionResult:
+    status: str
+    capture: CapturedCommand
+    worktree: Path
+    similarity: float
+    reason: str
+
+    @property
+    def reproduced(self) -> bool:
+        return self.status == "REPRODUCED"
 
 
 def parse_command_json(raw: str) -> tuple[str, ...]:
@@ -162,6 +178,101 @@ def capture_command(
     )
 
 
+def failure_similarity(left: str, right: str) -> float:
+    def signature(value: str) -> set[str]:
+        clean = ANSI_ESCAPE.sub("", value.lower())
+        clean = re.sub(r"(?:[a-z]:)?[\\/][^\s]+", "<path>", clean)
+        clean = re.sub(r"\b(?:0x)?[a-f0-9]{8,}\b", "<id>", clean)
+        clean = re.sub(r"\b\d+(?:\.\d+)?\b", "<number>", clean)
+        return set(SIGNATURE_TOKEN.findall(clean))
+
+    left_tokens = signature(left)
+    right_tokens = signature(right)
+    if not left_tokens and not right_tokens:
+        return 1.0
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def reproduce_failure(
+    original: CapturedCommand,
+    *,
+    repo: Path,
+    worktree_base: Path,
+    task_id: str,
+    base_ref: str,
+    log_path: Path,
+    max_log_bytes: int,
+    timeout_seconds: int,
+    remove_env: Sequence[str] = (),
+    similarity_threshold: float = 0.5,
+) -> ReproductionResult:
+    worktree = create_worktree(
+        repo,
+        worktree_base,
+        f"{task_id}-reproduction",
+        base_ref,
+    )
+    capture = capture_command(
+        original.command,
+        cwd=worktree,
+        log_path=log_path,
+        max_log_bytes=max_log_bytes,
+        timeout_seconds=timeout_seconds,
+        remove_env=remove_env,
+    )
+    original_log = original.log_path.read_text(encoding="utf-8", errors="replace")
+    reproduction_log = capture.log_path.read_text(encoding="utf-8", errors="replace")
+    similarity = failure_similarity(original_log, reproduction_log)
+
+    if capture.exit_code == 0:
+        status = "NOT_REPRODUCIBLE"
+        reason = "The owner-declared command passed in the clean worktree."
+    elif capture.exit_code == 124:
+        status = "REPRODUCTION_TIMEOUT"
+        reason = "The clean-worktree reproduction timed out."
+    elif capture.exit_code != original.exit_code:
+        status = "REPRODUCTION_MISMATCH"
+        reason = (
+            "The clean-worktree exit code did not match the original failure "
+            f"({original.exit_code} != {capture.exit_code})."
+        )
+    elif similarity < similarity_threshold:
+        status = "REPRODUCTION_MISMATCH"
+        reason = (
+            "The clean-worktree failure signature did not meet the configured "
+            f"similarity threshold ({similarity:.3f} < {similarity_threshold:.3f})."
+        )
+    else:
+        status = "REPRODUCED"
+        reason = "The failure reproduced from the verified commit in a clean worktree."
+
+    return ReproductionResult(
+        status=status,
+        capture=capture,
+        worktree=worktree,
+        similarity=similarity,
+        reason=reason,
+    )
+
+
+def reproduction_payload(
+    original: CapturedCommand,
+    result: ReproductionResult,
+) -> dict[str, Any]:
+    return {
+        "status": result.status,
+        "reason": result.reason,
+        "original_exit_code": original.exit_code,
+        "reproduction_exit_code": result.capture.exit_code,
+        "original_duration_seconds": original.duration_seconds,
+        "reproduction_duration_seconds": result.capture.duration_seconds,
+        "failure_similarity": result.similarity,
+        "worktree": str(result.worktree),
+    }
+
+
 def _load_event(env: Mapping[str, str]) -> dict[str, Any]:
     event_path = env.get("GITHUB_EVENT_PATH", "")
     if not event_path:
@@ -245,9 +356,10 @@ def build_failure_packet(
     acceptance: Sequence[str] = (),
     task_id: str | None = None,
     limits: TaskLimits | None = None,
+    reproduction: ReproductionResult | None = None,
 ) -> TaskPacket:
     log_tail = capture.log_path.read_text(encoding="utf-8", errors="replace")
-    evidence = (
+    evidence_items = [
         f"GitHub event: {context.event_name}",
         f"Repository: {context.repository}",
         f"Workflow/job: {context.workflow} / {context.job}",
@@ -255,14 +367,26 @@ def build_failure_packet(
         f"Commit: {context.sha}",
         f"Owner-declared command: {json.dumps(capture.command)}",
         f"Exit code: {capture.exit_code}; duration: {capture.duration_seconds:.2f}s",
-        "Bounded, redacted CI log tail:\n" + log_tail,
-    )
+        "Bounded, redacted original CI log tail:\n" + log_tail,
+    ]
+    if reproduction is not None:
+        reproduction_log = reproduction.capture.log_path.read_text(
+            encoding="utf-8", errors="replace"
+        )
+        evidence_items.extend(
+            [
+                f"Clean-worktree reproduction status: {reproduction.status}",
+                f"Failure signature similarity: {reproduction.similarity:.3f}",
+                "Bounded, redacted clean-worktree reproduction log tail:\n"
+                + reproduction_log,
+            ]
+        )
     return TaskPacket(
         id=task_id or default_task_id(context),
         kind="github_actions_failure",
         title=title,
-        base_ref="HEAD",
-        evidence=evidence,
+        base_ref=context.sha,
+        evidence=tuple(evidence_items),
         acceptance=tuple(acceptance),
         context_files=tuple(context_files),
         allowed_paths=tuple(allowed_paths),

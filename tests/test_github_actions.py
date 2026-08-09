@@ -13,6 +13,7 @@ from pathlib import Path
 from repojanitor.github_actions import (
     build_failure_packet,
     capture_command,
+    failure_similarity,
     parse_command_json,
     verify_github_context,
 )
@@ -61,6 +62,19 @@ class GitHubActionsTests(unittest.TestCase):
             parse_command_json("python -m unittest")
         with self.assertRaises(ValueError):
             parse_command_json('[]')
+
+    def test_failure_similarity_ignores_volatile_numbers(self):
+        original = (
+            "/home/runner/work/project/tests/test_parser.py:18 "
+            "FAILED test_blank in 0.12s: ValueError expected None"
+        )
+        reproduction = (
+            "/tmp/repojanitor-worktrees/tests/test_parser.py:21 "
+            "FAILED test_blank in 0.49s: ValueError expected None"
+        )
+        unrelated = "ModuleNotFoundError: no module named dependency"
+        self.assertGreater(failure_similarity(original, reproduction), 0.8)
+        self.assertLess(failure_similarity(original, unrelated), 0.5)
 
     def test_capture_is_bounded_and_redacted(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -163,7 +177,7 @@ class GitHubActionsTests(unittest.TestCase):
                 allowed_paths=("app.py",),
             )
             self.assertEqual(packet.kind, "github_actions_failure")
-            self.assertEqual(packet.base_ref, "HEAD")
+            self.assertEqual(packet.base_ref, env["GITHUB_SHA"])
             self.assertIn("Exit code: 7", "\n".join(packet.evidence))
 
     def test_ci_failure_produces_review_artifacts_and_stays_failed(self):
@@ -238,6 +252,79 @@ class GitHubActionsTests(unittest.TestCase):
             self.assertTrue((run_dir / "packet.json").is_file())
             self.assertTrue((run_dir / "report.md").is_file())
             self.assertTrue((run_dir / "proposed.patch").is_file())
+            reproduction = json.loads(
+                (run_dir / "reproduction.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(reproduction["status"], "REPRODUCED")
+            metadata = json.loads(
+                (run_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(metadata["provider_called"])
+
+    def test_ci_skips_model_when_failure_does_not_reproduce(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            event = {"repository": {"full_name": "owner/project"}}
+            repo, env = self.make_repo_and_env(root, event)
+            config_path = repo / "repojanitor.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "repo_path": ".",
+                        "artifact_dir": ".repojanitor/runs",
+                        "worktree_dir": str(root / "worktrees"),
+                        "provider": {
+                            "adapter": "openai_chat_completions",
+                            "name": "mock",
+                            "model": "must-not-run",
+                            "base_url": "https://example.test/v1",
+                            "api_key_env": "MOCK_PROVIDER_KEY",
+                        },
+                        "allowed_paths": ["app.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            marker = root / "transient.marker"
+            script = (
+                "from pathlib import Path; import sys; "
+                f"p=Path({str(marker)!r}); seen=p.exists(); "
+                "p.write_text('seen'); raise SystemExit(0 if seen else 9)"
+            )
+            output_path = root / "github-output.txt"
+            summary_path = root / "summary.md"
+            env["GITHUB_OUTPUT"] = str(output_path)
+            env["GITHUB_STEP_SUMMARY"] = str(summary_path)
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_json=json.dumps([sys.executable, "-c", script]),
+                title="Transient fixture failed",
+                context_files="app.py",
+                allowed_paths="app.py",
+                forbidden_paths="",
+                acceptance="The fixture passes.",
+                task_id=None,
+                max_log_bytes=4096,
+                allow_fork=False,
+                apply=False,
+                mock_response=str(root / "must-not-be-read.json"),
+                skip_reproduction=False,
+            )
+
+            with patch.dict(os.environ, env, clear=False), redirect_stdout(io.StringIO()):
+                exit_code = run_ci(args)
+
+            run_dir = repo / ".repojanitor" / "runs" / "gh-123-2-unit"
+            metadata = json.loads(
+                (run_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(metadata["status"], "NOT_REPRODUCIBLE")
+            self.assertFalse(metadata["provider_called"])
+            self.assertEqual(metadata["estimated_cost_usd"], 0.0)
+            self.assertTrue((run_dir / "reproduction.log").is_file())
+            self.assertFalse((run_dir / "proposed.patch").exists())
+            self.assertIn("status=NOT_REPRODUCIBLE", output_path.read_text())
 
 
 if __name__ == "__main__":

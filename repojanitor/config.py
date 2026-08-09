@@ -61,6 +61,7 @@ class RepoConfig:
     denied_paths: tuple[str, ...] = DEFAULT_DENIED_PATHS
     validation_commands: tuple[tuple[str, ...], ...] = ()
     command_timeout_seconds: int = 600
+    reproduction_similarity_threshold: float = 0.5
 
     @classmethod
     def from_dict(cls, value: dict[str, Any], config_path: Path) -> "RepoConfig":
@@ -71,6 +72,9 @@ class RepoConfig:
             return (base / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
 
         commands = tuple(tuple(str(part) for part in command) for command in value.get("validation_commands", []))
+        similarity_threshold = float(value.get("reproduction_similarity_threshold", 0.5))
+        if not 0.0 <= similarity_threshold <= 1.0:
+            raise ValueError("reproduction_similarity_threshold must be between 0 and 1")
         return cls(
             repo_path=resolve_path(str(value.get("repo_path", ".")), "."),
             artifact_dir=resolve_path(str(value.get("artifact_dir", ".repojanitor/runs")), ".repojanitor/runs"),
@@ -80,6 +84,7 @@ class RepoConfig:
             denied_paths=tuple(value.get("denied_paths", DEFAULT_DENIED_PATHS)),
             validation_commands=commands,
             command_timeout_seconds=int(value.get("command_timeout_seconds", 600)),
+            reproduction_similarity_threshold=similarity_threshold,
         )
 
 
